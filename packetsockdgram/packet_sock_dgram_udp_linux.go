@@ -23,12 +23,12 @@ import (
 //  package err definition
 var (
 	ErrNotDestPort    = errors.New("not match dest port")
+	ErrNotIpv4        = errors.New("ip ver not 4")
+	ErrNotIpv6        = errors.New("ip ver not 6")
 	ErrInvalidConn    = errors.New("invalid connection")
 	ErrMissingAddress = errors.New("missing address")
 	ErrNilHeader      = errors.New("nil header")
 	ErrHeaderTooShort = errors.New("header too short")
-	ErrNotIpv4        = errors.New("ip ver not 4")
-	ErrNotIpv6        = errors.New("ip ver not 6")
 	ErrPayloadLen     = errors.New("payload size not correct")
 )
 
@@ -272,6 +272,12 @@ func newConn(sa syscall.Sockaddr, isIpv4 bool, ifname string) (*Conn, error) {
 		handler: handler{fd, sa, isIpv4},
 	}
 	return cnn, nil
+}
+
+func (c *Conn) Readfrom(b []byte) (n int, h *IpHeader, uh *UdpHeader, p []byte, err error) {
+	n, h, uh, p, err = c.handler.readfrom(b)
+
+	return n, h, uh, p, err
 }
 
 func (c *Conn) Readfrom_(b []byte) (n int, h *IpHeader, uh *UdpHeader, p []byte, err error) {

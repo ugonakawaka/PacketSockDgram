@@ -27,6 +27,7 @@ var (
 )
 
 func main() {
+	flag.Parse()
 	fmt.Println(*AppName, *Port, *Addr4, *Dev, *b)
 	ip := net.ParseIP(*Addr4)
 	b4 := [4]byte{}
