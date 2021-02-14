@@ -43,7 +43,7 @@ func main() {
 
 	for {
 		b := make([]byte, 1500)
-		n, iph, udph, payload, err := cnn.Readfrom_(b)
+		n, iph, udph, payload, err := cnn.Readfrom(b)
 
 		fmt.Printf("err:[%v]\n", err)
 		fmt.Printf("size:[%d]\n", n)
@@ -52,6 +52,5 @@ func main() {
 		fmt.Printf("payload:[%v]\n", string(payload))
 		fmt.Printf("%s\n", hex.Dump(b[:n]))
 		fmt.Println("")
-		// log.Fatalln(err)
 	}
 }
