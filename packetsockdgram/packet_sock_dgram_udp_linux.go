@@ -1,5 +1,5 @@
-// 2021/01/09
-//
+// create:2021/01/09
+// update:2021/02/14
 //
 package packetsockdgram
 
@@ -80,9 +80,10 @@ func ParseUDPHeader(b []byte) (*UdpHeader, error) {
 // ===================
 // packet
 type handler struct {
-	fd     int
-	sa     syscall.Sockaddr
-	isIpv4 bool
+	fd      int
+	sa      syscall.Sockaddr
+	rcvport int
+	isIpv4  bool
 }
 
 func (c *handler) ok() bool { return c != nil }
@@ -93,6 +94,7 @@ func (hdl *handler) readFromIf(b []byte) (n int, h *IpHeader, uh *UdpHeader, p [
 	}
 
 	n, _, err = syscall.Recvfrom(hdl.fd, b, syscall.MSG_TRUNC)
+
 	if err != nil {
 		return -1, nil, nil, nil, err
 	}
@@ -130,14 +132,6 @@ func (hdl *handler) readFromIpv4(b []byte) (n int, iph *IpHeader, uh *UdpHeader,
 		return n, nil, nil, nil, ErrNotIpv4
 	}
 
-	// total header len
-	totalHeaderlen := (20 + UDPHeaderLen)
-
-	// header size check
-	if n < totalHeaderlen { // ipv4
-		return n, nil, nil, nil, ErrHeaderTooShort
-	}
-
 	// ipheader
 	ipv4h, err := ipv4.ParseHeader(b)
 	if err != nil {
@@ -145,28 +139,19 @@ func (hdl *handler) readFromIpv4(b []byte) (n int, iph *IpHeader, uh *UdpHeader,
 	}
 
 	iph = &IpHeader{Ipv4Header: ipv4h}
+	endudp4h := ipv4.HeaderLen + UDPHeaderLen
 
 	// udp header
-	uh, err = ParseUDPHeader(b[20:])
-	// if err != nil {
-	// 	return n, iph, nil, nil, err
-	// }
+	uh, err = ParseUDPHeader(b[ipv4.HeaderLen:endudp4h])
 
-	// payload size
-	payloadlen := func() int {
+	if err != nil {
+		return n, iph, nil, nil, err
+	}
 
-		lb := len(b)
-		if ipv4h.TotalLen < lb {
-			return ipv4h.TotalLen - totalHeaderlen
-		} else {
-			return lb - totalHeaderlen
-		}
-	}()
+	pb := b[endudp4h:]
 
-	pb := b[totalHeaderlen:(totalHeaderlen + payloadlen)]
 	// port
-	rcvport := hdl.sa.(*syscall.SockaddrInet4).Port
-	if rcvport != uh.DestinationPort {
+	if hdl.rcvport != uh.DestinationPort {
 		return n, iph, uh, pb, ErrNotDestPort
 	}
 
@@ -195,17 +180,9 @@ func (hdl *handler) readFromIpv6(b []byte) (n int, iph *IpHeader, uh *UdpHeader,
 		return n, iph, nil, nil, err
 	}
 
-	// payloadlen = udp header len + udp payload len
-	m := ipv6.HeaderLen + ipv6h.PayloadLen
-
-	if n != m {
-		return n, iph, nil, nil, ErrPayloadLen
-	}
-
-	pb := b[endudp6h:n]
+	pb := b[endudp6h:]
 	// port
-	rcvport := hdl.sa.(*syscall.SockaddrInet6).Port
-	if rcvport != uh.DestinationPort {
+	if hdl.rcvport != uh.DestinationPort {
 		return n, iph, uh, pb, ErrNotDestPort
 	}
 
@@ -246,18 +223,23 @@ func NewConn(sa syscall.Sockaddr, ifname string) (*Conn, error) {
 	return newConn(sa, isIpv4, ifname)
 }
 
-func newConnIf(ifname string) (*Conn, error) {
+//
+func NewConnIf(port int, ifname string) (*Conn, error) {
+	return newConnIf(port, ifname)
+}
+
+func newConnIf(port int, ifname string) (*Conn, error) {
 	intf, err := net.InterfaceByName(ifname)
 
-	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_DGRAM, 0)
+	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_DGRAM, syscall.ETH_P_ALL)
 	if err != nil {
 		return nil, err
 	}
 
 	sll := syscall.RawSockaddrLinklayer{
-		Family: syscall.AF_PACKET,
-		// Protocol: htons(uint16(ethP)),
-		Ifindex: int32(intf.Index),
+		Family:   syscall.AF_PACKET,
+		Protocol: htons(uint16(syscall.ETH_P_ALL)),
+		Ifindex:  int32(intf.Index),
 	}
 
 	_, _, err = syscall.Syscall(syscall.SYS_BIND, uintptr(fd),
@@ -267,9 +249,9 @@ func newConnIf(ifname string) (*Conn, error) {
 	}
 
 	cnn := &Conn{
-		fd: fd,
-		// sa:      sa,
-		handler: handler{fd, nil, false},
+		fd:      fd,
+		sa:      nil,
+		handler: handler{fd, nil, port, false},
 	}
 	return cnn, nil
 }
@@ -303,11 +285,19 @@ func newConn(sa syscall.Sockaddr, isIpv4 bool, ifname string) (*Conn, error) {
 		return nil, err
 	}
 
+	// port := func(sa syscall.Sockaddr) int {
+
+	// 	if sa.(type) == syscall.SockaddrInet4 {
+	// 		return sa.(*syscall.SockaddrInet4).Port
+	// 	}
+	// 	return sa.(*syscall.SockaddrInet6).Port
+	// }(sa)
+
 	cnn := &Conn{
 		fd:      fd,
 		sa:      sa,
 		isIpv4:  isIpv4,
-		handler: handler{fd, sa, isIpv4},
+		handler: handler{fd, sa, 55501, isIpv4},
 	}
 	return cnn, nil
 }
@@ -315,7 +305,7 @@ func newConn(sa syscall.Sockaddr, isIpv4 bool, ifname string) (*Conn, error) {
 func (c *Conn) Readfrom(b []byte) (n int, h *IpHeader, uh *UdpHeader, p []byte, err error) {
 
 	if c.sa == nil {
-		// return c.handler.readFromIf(b)
+		return c.handler.readFromIf(b)
 	}
 
 	return c.handler.readFrom(b)
